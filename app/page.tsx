@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import DashboardClient from "./dashboard-client";
 
 export default function Home() {
@@ -6,5 +7,9 @@ export default function Home() {
     process.env.NEXT_PUBLIC_API_URL?.trim() ||
     "";
 
-  return <DashboardClient apiUrl={apiUrl} />;
+  return (
+    <Suspense fallback={<div>Loading dashboard...</div>}>
+      <DashboardClient apiUrl={apiUrl} />
+    </Suspense>
+  );
 }
