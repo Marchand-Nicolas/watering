@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useSearchParams } from "next/navigation";
 
 type Plant = {
@@ -14,6 +21,22 @@ type ApiError = {
   error?: string;
   message?: string;
 };
+
+const SECONDS_PER_DAY = 86_400;
+
+function secondsToDays(seconds: number): string {
+  const days = seconds / SECONDS_PER_DAY;
+  return Number.isInteger(days) ? String(days) : days.toFixed(2);
+}
+
+function daysToSeconds(daysText: string): number {
+  const days = Number.parseFloat(daysText);
+  if (!Number.isFinite(days) || days <= 0) {
+    return Number.NaN;
+  }
+
+  return Math.round(days * SECONDS_PER_DAY);
+}
 
 type DashboardClientProps = {
   apiUrl: string;
@@ -30,9 +53,13 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
   const [success, setSuccess] = useState("");
 
   const [durationInput, setDurationInput] = useState("15");
-  const [frequencyInput, setFrequencyInput] = useState("24");
+  const [frequencyInput, setFrequencyInput] = useState("1");
   const [enabledInput, setEnabledInput] = useState(true);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [orderingId, setOrderingId] = useState<number | null>(null);
+  const [detailsPlantId, setDetailsPlantId] = useState<number | null>(null);
+  const [orderDurationInput, setOrderDurationInput] = useState("");
 
   const normalizedApiUrl = useMemo(() => apiUrl.replace(/\/$/, ""), [apiUrl]);
 
@@ -91,15 +118,15 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
     event.preventDefault();
 
     const duration = Number.parseInt(durationInput, 10);
-    const frequency = Number.parseInt(frequencyInput, 10);
+    const frequencySeconds = daysToSeconds(frequencyInput);
 
     if (!Number.isInteger(duration) || duration <= 0) {
       setError("Watering duration must be a positive integer.");
       return;
     }
 
-    if (!Number.isInteger(frequency) || frequency <= 0) {
-      setError("Watering frequency must be a positive integer.");
+    if (!Number.isInteger(frequencySeconds) || frequencySeconds <= 0) {
+      setError("Watering frequency must be a positive number of days.");
       return;
     }
 
@@ -128,7 +155,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
           body: JSON.stringify({
             token,
             watering_duration: duration,
-            watering_frequency: frequency,
+            watering_frequency: frequencySeconds,
             enabled: enabledInput,
           }),
         },
@@ -140,7 +167,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
 
       setSuccess("Plant created successfully.");
       setDurationInput("15");
-      setFrequencyInput("24");
+      setFrequencyInput("1");
       setEnabledInput(true);
       await loadPlants();
     } catch (createError) {
@@ -154,51 +181,195 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
     }
   };
 
-  const updatePlant = async (
-    plantId: number,
-    updates: Partial<
-      Pick<Plant, "watering_duration" | "watering_frequency" | "enabled">
-    >,
-  ) => {
-    if (!token || !normalizedApiUrl) {
+  const updatePlant = useCallback(
+    async (
+      plantId: number,
+      updates: Partial<
+        Pick<Plant, "watering_duration" | "watering_frequency" | "enabled">
+      >,
+    ) => {
+      if (!token || !normalizedApiUrl) {
+        return;
+      }
+
+      setUpdatingId(plantId);
+      setError("");
+      setSuccess("");
+
+      try {
+        const response = await fetch(
+          `${normalizedApiUrl}/api/dashboard/update_plant`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              token,
+              plant_id: plantId,
+              ...updates,
+            }),
+          },
+        );
+
+        if (!response.ok) {
+          throw new Error(await parseApiError(response));
+        }
+
+        setSuccess(`Plant #${plantId} auto-saved.`);
+        await loadPlants();
+      } catch (updateError) {
+        setError(
+          updateError instanceof Error
+            ? updateError.message
+            : "Failed to update plant",
+        );
+      } finally {
+        setUpdatingId(null);
+      }
+    },
+    [token, normalizedApiUrl, loadPlants],
+  );
+
+  const deletePlant = useCallback(
+    async (plantId: number, closeDetails = false) => {
+      if (!token || !normalizedApiUrl) {
+        return;
+      }
+
+      setDeletingId(plantId);
+      setError("");
+      setSuccess("");
+
+      try {
+        const response = await fetch(
+          `${normalizedApiUrl}/api/dashboard/delete_plant`,
+          {
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              token,
+              plant_id: plantId,
+            }),
+          },
+        );
+
+        if (!response.ok) {
+          throw new Error(await parseApiError(response));
+        }
+
+        setSuccess(`Plant #${plantId} deleted.`);
+        if (closeDetails) {
+          setDetailsPlantId(null);
+        }
+        await loadPlants();
+      } catch (deleteError) {
+        setError(
+          deleteError instanceof Error
+            ? deleteError.message
+            : "Failed to delete plant",
+        );
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [token, normalizedApiUrl, loadPlants],
+  );
+
+  const addWateringOrder = useCallback(
+    async (plantId: number, durationText?: string) => {
+      if (!token || !normalizedApiUrl) {
+        return;
+      }
+
+      const trimmedDuration = durationText?.trim() ?? "";
+      let duration: number | undefined;
+
+      if (trimmedDuration.length > 0) {
+        const parsed = Number.parseInt(trimmedDuration, 10);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+          setError("Order duration must be a positive integer in seconds.");
+          return;
+        }
+
+        duration = parsed;
+      }
+
+      setOrderingId(plantId);
+      setError("");
+      setSuccess("");
+
+      try {
+        const response = await fetch(
+          `${normalizedApiUrl}/api/dashboard/add_order`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              token,
+              plant_id: plantId,
+              ...(duration !== undefined ? { duration } : {}),
+            }),
+          },
+        );
+
+        if (!response.ok) {
+          throw new Error(await parseApiError(response));
+        }
+
+        setSuccess(`Watering order created for plant #${plantId}.`);
+      } catch (orderError) {
+        setError(
+          orderError instanceof Error
+            ? orderError.message
+            : "Failed to create watering order",
+        );
+      } finally {
+        setOrderingId(null);
+      }
+    },
+    [token, normalizedApiUrl],
+  );
+
+  const selectedPlant = useMemo(
+    () => plants.find((plant) => plant.id === detailsPlantId) ?? null,
+    [plants, detailsPlantId],
+  );
+
+  const openPlantDetails = (plantId: number) => {
+    setOrderDurationInput("");
+    setDetailsPlantId(plantId);
+  };
+
+  const closePlantDetails = () => {
+    setDetailsPlantId(null);
+    setOrderDurationInput("");
+  };
+
+  const handleCreateOrderFromDetails = async () => {
+    if (!selectedPlant) {
       return;
     }
 
-    setUpdatingId(plantId);
-    setError("");
-    setSuccess("");
+    await addWateringOrder(selectedPlant.id, orderDurationInput);
+    setOrderDurationInput("");
+  };
 
-    try {
-      const response = await fetch(
-        `${normalizedApiUrl}/api/dashboard/update_plant`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            token,
-            plant_id: plantId,
-            ...updates,
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(await parseApiError(response));
-      }
-
-      setSuccess(`Plant #${plantId} updated.`);
-      await loadPlants();
-    } catch (updateError) {
-      setError(
-        updateError instanceof Error
-          ? updateError.message
-          : "Failed to update plant",
-      );
-    } finally {
-      setUpdatingId(null);
+  const handleDeleteFromDetails = async () => {
+    if (!selectedPlant) {
+      return;
     }
+
+    const confirmed = window.confirm(`Delete plant #${selectedPlant.id}?`);
+    if (!confirmed) {
+      return;
+    }
+
+    await deletePlant(selectedPlant.id, true);
   };
 
   const handleManualRefresh = async () => {
@@ -215,6 +386,20 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
 
     void loadPlants();
   }, [canLoad, loadPlants]);
+
+  useEffect(() => {
+    if (!success) {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      setSuccess("");
+    }, 2200);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [success]);
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_15%_20%,rgba(0,255,170,0.09),transparent_35%),radial-gradient(circle_at_85%_5%,rgba(89,129,255,0.1),transparent_30%),linear-gradient(180deg,#050505_0%,#090909_45%,#030303_100%)] text-zinc-100">
@@ -255,12 +440,14 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
             label="Avg. Frequency"
             value={
               plants.length > 0
-                ? `${Math.round(
+                ? `${(
                     plants.reduce(
                       (sum, plant) => sum + plant.watering_frequency,
                       0,
-                    ) / plants.length,
-                  )}h`
+                    ) /
+                    plants.length /
+                    SECONDS_PER_DAY
+                  ).toFixed(2)}d`
                 : "-"
             }
           />
@@ -279,8 +466,6 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
           />
         )}
         {error && <AlertCard tone="error" message={error} />}
-        {success && <AlertCard tone="success" message={success} />}
-
         <section className="grid grid-cols-1 gap-6 lg:grid-cols-[1.1fr_1.9fr]">
           <form
             onSubmit={handleCreatePlant}
@@ -295,7 +480,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
               className="mt-5 block text-xs uppercase tracking-[0.16em] text-zinc-400"
               htmlFor="duration"
             >
-              Watering Duration (minutes)
+              Watering Duration (seconds)
             </label>
             <input
               id="duration"
@@ -309,13 +494,16 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
               className="mt-4 block text-xs uppercase tracking-[0.16em] text-zinc-400"
               htmlFor="frequency"
             >
-              Frequency (hours)
+              Frequency (days)
             </label>
             <input
               id="frequency"
+              type="number"
+              step="0.1"
+              min="0.1"
               value={frequencyInput}
               onChange={(event) => setFrequencyInput(event.target.value)}
-              inputMode="numeric"
+              inputMode="decimal"
               className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none ring-0 transition placeholder:text-zinc-500 focus:border-emerald-300/60"
             />
 
@@ -345,12 +533,12 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
             </p>
 
             <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
-              <div className="grid grid-cols-[0.6fr_1fr_1fr_0.8fr_0.8fr] gap-2 bg-zinc-900/80 px-3 py-2 text-xs uppercase tracking-[0.16em] text-zinc-400">
+              <div className="grid grid-cols-[0.7fr_1fr_1fr_0.8fr_0.9fr] gap-2 bg-zinc-900/80 px-3 py-2 text-xs uppercase tracking-[0.16em] text-zinc-400">
                 <span>ID</span>
                 <span>Duration</span>
-                <span>Frequency</span>
+                <span>Frequency (d)</span>
                 <span>Status</span>
-                <span>Action</span>
+                <span>Details</span>
               </div>
 
               {plants.length === 0 ? (
@@ -363,10 +551,15 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
                 <ul className="divide-y divide-white/5">
                   {plants.map((plant) => (
                     <PlantRow
-                      key={plant.id}
+                      key={`${plant.id}-${plant.watering_duration}-${plant.watering_frequency}-${Number(plant.enabled)}`}
                       plant={plant}
-                      disabled={updatingId === plant.id}
-                      onSave={(updates) => updatePlant(plant.id, updates)}
+                      disabled={
+                        updatingId === plant.id ||
+                        deletingId === plant.id ||
+                        orderingId === plant.id
+                      }
+                      onAutoSave={updatePlant}
+                      onOpenDetails={openPlantDetails}
                     />
                   ))}
                 </ul>
@@ -375,6 +568,20 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
           </div>
         </section>
       </main>
+
+      {success && <SuccessToast message={success} />}
+      {selectedPlant && (
+        <PlantDetailsModal
+          plant={selectedPlant}
+          orderDurationInput={orderDurationInput}
+          setOrderDurationInput={setOrderDurationInput}
+          isOrdering={orderingId === selectedPlant.id}
+          isDeleting={deletingId === selectedPlant.id}
+          onClose={closePlantDetails}
+          onCreateOrder={handleCreateOrderFromDetails}
+          onDelete={handleDeleteFromDetails}
+        />
+      )}
     </div>
   );
 }
@@ -416,21 +623,39 @@ function AlertCard({ tone, message }: AlertCardProps) {
 type PlantRowProps = {
   plant: Plant;
   disabled: boolean;
-  onSave: (
+  onAutoSave: (
+    plantId: number,
     updates: Partial<
       Pick<Plant, "watering_duration" | "watering_frequency" | "enabled">
     >,
   ) => void;
+  onOpenDetails: (plantId: number) => void;
 };
 
-function PlantRow({ plant, disabled, onSave }: PlantRowProps) {
+function PlantRow({
+  plant,
+  disabled,
+  onAutoSave,
+  onOpenDetails,
+}: PlantRowProps) {
   const [duration, setDuration] = useState(String(plant.watering_duration));
-  const [frequency, setFrequency] = useState(String(plant.watering_frequency));
+  const [frequencyDays, setFrequencyDays] = useState(
+    secondsToDays(plant.watering_frequency),
+  );
   const [enabled, setEnabled] = useState(plant.enabled);
+  const lastSavedRef = useRef({
+    watering_duration: plant.watering_duration,
+    watering_frequency: plant.watering_frequency,
+    enabled: plant.enabled,
+  });
 
-  const saveRow = () => {
+  useEffect(() => {
+    if (disabled) {
+      return;
+    }
+
     const wateringDuration = Number.parseInt(duration, 10);
-    const wateringFrequency = Number.parseInt(frequency, 10);
+    const wateringFrequency = daysToSeconds(frequencyDays);
 
     if (!Number.isInteger(wateringDuration) || wateringDuration <= 0) {
       return;
@@ -440,15 +665,33 @@ function PlantRow({ plant, disabled, onSave }: PlantRowProps) {
       return;
     }
 
-    onSave({
+    const pendingUpdate = {
       watering_duration: wateringDuration,
       watering_frequency: wateringFrequency,
       enabled,
-    });
-  };
+    };
+
+    if (
+      pendingUpdate.watering_duration ===
+        lastSavedRef.current.watering_duration &&
+      pendingUpdate.watering_frequency ===
+        lastSavedRef.current.watering_frequency &&
+      pendingUpdate.enabled === lastSavedRef.current.enabled
+    ) {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      onAutoSave(plant.id, pendingUpdate);
+    }, 700);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [duration, frequencyDays, enabled, disabled, plant.id, onAutoSave]);
 
   return (
-    <li className="grid grid-cols-[0.6fr_1fr_1fr_0.8fr_0.8fr] items-center gap-2 bg-black/20 px-3 py-2 text-sm text-zinc-200">
+    <li className="grid grid-cols-[0.7fr_1fr_1fr_0.8fr_0.9fr] items-center gap-2 bg-black/20 px-3 py-2 text-sm text-zinc-200">
       <span className="font-medium text-zinc-300">#{plant.id}</span>
       <input
         value={duration}
@@ -458,10 +701,13 @@ function PlantRow({ plant, disabled, onSave }: PlantRowProps) {
         className="rounded-lg border border-white/10 bg-zinc-900/90 px-2 py-1 text-sm outline-none transition focus:border-emerald-300/60 disabled:opacity-50"
       />
       <input
-        value={frequency}
-        onChange={(event) => setFrequency(event.target.value)}
+        type="number"
+        step="0.1"
+        min="0.1"
+        value={frequencyDays}
+        onChange={(event) => setFrequencyDays(event.target.value)}
         disabled={disabled}
-        inputMode="numeric"
+        inputMode="decimal"
         className="rounded-lg border border-white/10 bg-zinc-900/90 px-2 py-1 text-sm outline-none transition focus:border-emerald-300/60 disabled:opacity-50"
       />
       <label className="inline-flex items-center gap-2 text-xs text-zinc-300">
@@ -476,12 +722,151 @@ function PlantRow({ plant, disabled, onSave }: PlantRowProps) {
       </label>
       <button
         type="button"
-        onClick={saveRow}
         disabled={disabled}
-        className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 px-2 py-1 text-xs font-medium text-emerald-100 transition hover:border-emerald-300/70 hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={() => onOpenDetails(plant.id)}
+        aria-label={`Open details for plant ${plant.id}`}
+        title={`Open details for plant ${plant.id}`}
+        className="rounded-lg border border-white/20 bg-white/8 px-2 py-1 text-xs font-medium text-zinc-100 transition hover:border-emerald-300/60 hover:bg-emerald-400/12 disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {disabled ? "Saving" : "Save"}
+        Details
       </button>
     </li>
+  );
+}
+
+type PlantDetailsModalProps = {
+  plant: Plant;
+  orderDurationInput: string;
+  setOrderDurationInput: (value: string) => void;
+  isOrdering: boolean;
+  isDeleting: boolean;
+  onClose: () => void;
+  onCreateOrder: () => void;
+  onDelete: () => void;
+};
+
+function PlantDetailsModal({
+  plant,
+  orderDurationInput,
+  setOrderDurationInput,
+  isOrdering,
+  isDeleting,
+  onClose,
+  onCreateOrder,
+  onDelete,
+}: PlantDetailsModalProps) {
+  const isBusy = isOrdering || isDeleting;
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-black/75 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <section className="relative z-10 w-full max-w-3xl rounded-3xl border border-white/12 bg-zinc-950/95 p-6 shadow-[0_30px_90px_rgba(0,0,0,0.6)]">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.18em] text-zinc-400">
+              Plant Details
+            </p>
+            <h3 className="mt-2 text-2xl font-semibold text-white">
+              Plant #{plant.id}
+            </h3>
+            <p className="mt-2 text-sm text-zinc-300">
+              Manage manual watering orders or remove this plant.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-white/20 bg-white/5 px-3 py-1.5 text-sm text-zinc-200 transition hover:border-white/40 hover:bg-white/10"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <article className="rounded-xl border border-white/10 bg-black/30 p-4">
+            <p className="text-xs uppercase tracking-[0.16em] text-zinc-400">
+              Duration
+            </p>
+            <p className="mt-2 text-lg font-medium text-white">
+              {plant.watering_duration}s
+            </p>
+          </article>
+          <article className="rounded-xl border border-white/10 bg-black/30 p-4">
+            <p className="text-xs uppercase tracking-[0.16em] text-zinc-400">
+              Frequency
+            </p>
+            <p className="mt-2 text-lg font-medium text-white">
+              {secondsToDays(plant.watering_frequency)}d
+            </p>
+          </article>
+          <article className="rounded-xl border border-white/10 bg-black/30 p-4">
+            <p className="text-xs uppercase tracking-[0.16em] text-zinc-400">
+              Status
+            </p>
+            <p className="mt-2 text-lg font-medium text-white">
+              {plant.enabled ? "Enabled" : "Disabled"}
+            </p>
+          </article>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-cyan-300/25 bg-cyan-400/7 p-4">
+          <h4 className="text-sm font-semibold text-cyan-100">
+            Create Watering Order
+          </h4>
+          <p className="mt-1 text-sm text-zinc-300">
+            Optional custom duration in seconds. Leave empty to use plant
+            default.
+          </p>
+          <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+            <input
+              value={orderDurationInput}
+              onChange={(event) => setOrderDurationInput(event.target.value)}
+              inputMode="numeric"
+              placeholder="Optional duration (seconds)"
+              disabled={isBusy}
+              className="w-full rounded-xl border border-white/12 bg-black/35 px-3 py-2 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-cyan-300/60 disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={onCreateOrder}
+              disabled={isBusy}
+              className="rounded-xl border border-cyan-300/30 bg-cyan-400/12 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:border-cyan-300/65 hover:bg-cyan-400/22 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {isOrdering ? "Creating..." : "Create order"}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-rose-300/25 bg-rose-400/7 p-4">
+          <h4 className="text-sm font-semibold text-rose-100">Danger Zone</h4>
+          <p className="mt-1 text-sm text-zinc-300">
+            Deleting a plant also deletes related logs, orders, and calls.
+          </p>
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={isBusy}
+            className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-400/14 px-4 py-2 text-sm font-medium text-rose-100 transition hover:border-rose-300/65 hover:bg-rose-400/22 disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            {isDeleting ? "Deleting..." : "Delete plant"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+type SuccessToastProps = {
+  message: string;
+};
+
+function SuccessToast({ message }: SuccessToastProps) {
+  return (
+    <div className="fixed bottom-4 right-4 z-50 rounded-xl border border-emerald-300/45 bg-emerald-400/20 px-4 py-3 text-sm font-medium text-emerald-100 shadow-[0_12px_38px_rgba(0,0,0,0.5)] backdrop-blur-md">
+      {message}
+    </div>
   );
 }
