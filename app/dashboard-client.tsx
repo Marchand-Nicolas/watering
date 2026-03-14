@@ -15,6 +15,16 @@ type Plant = {
   watering_duration: number;
   enabled: boolean;
   watering_frequency: number;
+  last_call?: string | null;
+  is_last_call_stale?: boolean;
+};
+
+type Order = {
+  id: number;
+  plant_id: number;
+  date: string;
+  duration: number;
+  status: string;
 };
 
 type ApiError = {
@@ -23,6 +33,7 @@ type ApiError = {
 };
 
 const SECONDS_PER_DAY = 86_400;
+const MS_PER_DAY = 86_400_000;
 
 function secondsToDays(seconds: number): string {
   const days = seconds / SECONDS_PER_DAY;
@@ -38,6 +49,21 @@ function daysToSeconds(daysText: string): number {
   return Math.round(days * SECONDS_PER_DAY);
 }
 
+function isLastCallOlderThanOneDay(
+  lastCall: string | null | undefined,
+): boolean {
+  if (!lastCall) {
+    return false;
+  }
+
+  const lastCallTime = Date.parse(lastCall);
+  if (!Number.isFinite(lastCallTime)) {
+    return false;
+  }
+
+  return Date.now() - lastCallTime > MS_PER_DAY;
+}
+
 type DashboardClientProps = {
   apiUrl: string;
 };
@@ -47,6 +73,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
   const token = searchParams.get("token")?.trim() ?? "";
 
   const [plants, setPlants] = useState<Plant[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -102,7 +129,11 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
       }
 
       const data = (await response.json()) as { plants?: Plant[] };
-      setPlants(data.plants ?? []);
+      const normalizedPlants = (data.plants ?? []).map((plant) => ({
+        ...plant,
+        is_last_call_stale: isLastCallOlderThanOneDay(plant.last_call),
+      }));
+      setPlants(normalizedPlants);
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -111,6 +142,49 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
       );
     } finally {
       setLoading(false);
+    }
+  }, [token, normalizedApiUrl]);
+
+  const loadOrders = useCallback(async () => {
+    if (!token || !normalizedApiUrl) {
+      return;
+    }
+
+    const endpoints = ["/api/dashboard/orders", "/dashboard/orders"];
+    let lastError: Error | null = null;
+
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetch(
+          `${normalizedApiUrl}${endpoint}?token=${encodeURIComponent(token)}`,
+          {
+            method: "GET",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            cache: "no-store",
+          },
+        );
+
+        if (!response.ok) {
+          lastError = new Error(await parseApiError(response));
+          continue;
+        }
+
+        const data = (await response.json()) as { orders?: Order[] };
+        setOrders(data.orders ?? []);
+        return;
+      } catch (loadError) {
+        lastError =
+          loadError instanceof Error
+            ? loadError
+            : new Error("Unable to load orders");
+      }
+    }
+
+    setOrders([]);
+    if (lastError) {
+      setError(lastError.message);
     }
   }, [token, normalizedApiUrl]);
 
@@ -372,11 +446,6 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
     await deletePlant(selectedPlant.id, true);
   };
 
-  const handleManualRefresh = async () => {
-    setSuccess("");
-    await loadPlants();
-  };
-
   const canLoad = Boolean(token && normalizedApiUrl);
 
   useEffect(() => {
@@ -384,8 +453,31 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
       return;
     }
 
-    void loadPlants();
-  }, [canLoad, loadPlants]);
+    let isRefreshing = false;
+
+    const refreshAll = async () => {
+      if (isRefreshing) {
+        return;
+      }
+
+      isRefreshing = true;
+      try {
+        await Promise.all([loadPlants(), loadOrders()]);
+      } finally {
+        isRefreshing = false;
+      }
+    };
+
+    void refreshAll();
+
+    const intervalId = setInterval(() => {
+      void refreshAll();
+    }, 2000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [canLoad, loadPlants, loadOrders]);
 
   useEffect(() => {
     if (!success) {
@@ -403,7 +495,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_15%_20%,rgba(0,255,170,0.09),transparent_35%),radial-gradient(circle_at_85%_5%,rgba(89,129,255,0.1),transparent_30%),linear-gradient(180deg,#050505_0%,#090909_45%,#030303_100%)] text-zinc-100">
-      <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:42px_42px]" />
+      <div className="pointer-events-none absolute inset-0 opacity-40 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-size-[42px_42px]" />
       <main className="relative z-10 mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-8 sm:px-8 lg:py-12">
         <header className="rounded-3xl border border-white/10 bg-black/45 p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_20px_70px_rgba(0,0,0,0.65)] backdrop-blur-lg">
           <p className="text-xs uppercase tracking-[0.28em] text-emerald-300/85">
@@ -419,14 +511,6 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
                 devices in real-time.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={handleManualRefresh}
-              disabled={!canLoad || loading}
-              className="rounded-xl border border-white/20 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-emerald-300/60 hover:bg-emerald-400/10 disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {loading ? "Refreshing..." : "Refresh plants"}
-            </button>
           </div>
         </header>
 
@@ -567,6 +651,65 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
             </div>
           </div>
         </section>
+
+        <section className="rounded-2xl border border-white/10 bg-zinc-950/80 p-5 shadow-lg shadow-black/30">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Orders</h2>
+              <p className="mt-1 text-sm text-zinc-400">
+                Latest watering orders from the device.
+              </p>
+            </div>
+            <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">
+              {orders.length} total
+            </p>
+          </div>
+
+          <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
+            <div className="grid grid-cols-[0.8fr_0.8fr_1.3fr_0.8fr_0.9fr] gap-2 bg-zinc-900/80 px-3 py-2 text-xs uppercase tracking-[0.16em] text-zinc-400">
+              <span>ID</span>
+              <span>Plant</span>
+              <span>Date</span>
+              <span>Duration</span>
+              <span>Status</span>
+            </div>
+
+            {orders.length === 0 ? (
+              <div className="px-3 py-6 text-center text-sm text-zinc-500">
+                {loading
+                  ? "Loading orders..."
+                  : "No orders found for this token."}
+              </div>
+            ) : (
+              <ul className="divide-y divide-white/5">
+                {orders.map((order) => (
+                  <li
+                    key={`${order.id}-${order.date}`}
+                    className={`grid grid-cols-[0.8fr_0.8fr_1.3fr_0.8fr_0.9fr] items-center gap-2 px-3 py-2 text-sm ${
+                      order.status.toLowerCase() === "completed"
+                        ? "border-l-2 border-emerald-300/70 bg-emerald-500/16 text-emerald-100"
+                        : order.status.toLowerCase() === "started"
+                          ? "border-l-2 border-amber-300/80 bg-[repeating-linear-gradient(135deg,rgba(250,204,21,0.28)_0px,rgba(250,204,21,0.28)_8px,rgba(0,0,0,0.38)_8px,rgba(0,0,0,0.38)_16px)] text-amber-50"
+                          : "bg-black/20 text-zinc-200"
+                    }`}
+                  >
+                    <span className="font-medium text-zinc-300">
+                      #{order.id}
+                    </span>
+                    <span className="text-zinc-200">#{order.plant_id}</span>
+                    <span className="text-zinc-300">
+                      {new Date(order.date).toLocaleString()}
+                    </span>
+                    <span className="text-zinc-100">{order.duration}s</span>
+                    <span className="capitalize text-zinc-100">
+                      {order.status}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
       </main>
 
       {success && <SuccessToast message={success} />}
@@ -690,15 +833,24 @@ function PlantRow({
     };
   }, [duration, frequencyDays, enabled, disabled, plant.id, onAutoSave]);
 
+  const hasNoConnection = !plant.last_call;
+  const isLastCallStale = Boolean(plant.is_last_call_stale);
+
+  const rowClassName = hasNoConnection
+    ? "grid grid-cols-[0.7fr_1fr_1fr_0.8fr_0.9fr] items-center gap-2 border-l-2 border-zinc-500/60 bg-zinc-700/20 px-3 py-2 text-sm text-zinc-400"
+    : isLastCallStale
+      ? "grid grid-cols-[0.7fr_1fr_1fr_0.8fr_0.9fr] items-center gap-2 border-l-2 border-rose-400/70 bg-rose-500/15 px-3 py-2 text-sm text-rose-100"
+      : "grid grid-cols-[0.7fr_1fr_1fr_0.8fr_0.9fr] items-center gap-2 bg-black/20 px-3 py-2 text-sm text-zinc-200";
+
   return (
-    <li className="grid grid-cols-[0.7fr_1fr_1fr_0.8fr_0.9fr] items-center gap-2 bg-black/20 px-3 py-2 text-sm text-zinc-200">
-      <span className="font-medium text-zinc-300">#{plant.id}</span>
+    <li className={rowClassName}>
+      <span className="font-medium text-zinc-300">🌱 #{plant.id}</span>
       <input
         value={duration}
         onChange={(event) => setDuration(event.target.value)}
         disabled={disabled}
         inputMode="numeric"
-        className="rounded-lg border border-white/10 bg-zinc-900/90 px-2 py-1 text-sm outline-none transition focus:border-emerald-300/60 disabled:opacity-50"
+        className="rounded-lg w-25 border border-white/10 bg-zinc-900/90 px-2 py-1 text-sm outline-none transition focus:border-emerald-300/60 disabled:opacity-50"
       />
       <input
         type="number"
@@ -708,7 +860,7 @@ function PlantRow({
         onChange={(event) => setFrequencyDays(event.target.value)}
         disabled={disabled}
         inputMode="decimal"
-        className="rounded-lg border border-white/10 bg-zinc-900/90 px-2 py-1 text-sm outline-none transition focus:border-emerald-300/60 disabled:opacity-50"
+        className="rounded-lg w-25 border border-white/10 bg-zinc-900/90 px-2 py-1 text-sm outline-none transition focus:border-emerald-300/60 disabled:opacity-50"
       />
       <label className="inline-flex items-center gap-2 text-xs text-zinc-300">
         <input
@@ -756,6 +908,18 @@ function PlantDetailsModal({
   onDelete,
 }: PlantDetailsModalProps) {
   const isBusy = isOrdering || isDeleting;
+  const lastConnectionLabel = useMemo(() => {
+    if (!plant.last_call) {
+      return "No connection yet";
+    }
+
+    const lastConnectionTime = Date.parse(plant.last_call);
+    if (!Number.isFinite(lastConnectionTime)) {
+      return "Invalid date";
+    }
+
+    return new Date(lastConnectionTime).toLocaleString();
+  }, [plant.last_call]);
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
@@ -785,7 +949,7 @@ function PlantDetailsModal({
           </button>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <article className="rounded-xl border border-white/10 bg-black/30 p-4">
             <p className="text-xs uppercase tracking-[0.16em] text-zinc-400">
               Duration
@@ -808,6 +972,14 @@ function PlantDetailsModal({
             </p>
             <p className="mt-2 text-lg font-medium text-white">
               {plant.enabled ? "Enabled" : "Disabled"}
+            </p>
+          </article>
+          <article className="rounded-xl border border-white/10 bg-black/30 p-4">
+            <p className="text-xs uppercase tracking-[0.16em] text-zinc-400">
+              Last Connection
+            </p>
+            <p className="mt-2 text-sm font-medium text-white">
+              {lastConnectionLabel}
             </p>
           </article>
         </div>
