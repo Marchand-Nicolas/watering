@@ -25,6 +25,8 @@ type Order = {
   date: string;
   duration: number;
   status: string;
+  started_date?: string | null;
+  completed_date?: string | null;
 };
 
 type ApiError = {
@@ -90,6 +92,41 @@ function formatRelativeTimeFromNow(timestampMs: number): string {
   return `${Math.abs(days)}d ago`;
 }
 
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return "-";
+  }
+
+  return new Date(parsed).toLocaleString();
+}
+
+function computeActualDurationSeconds(
+  startedDate: string | null | undefined,
+  completedDate: string | null | undefined,
+): number | null {
+  if (!startedDate || !completedDate) {
+    return null;
+  }
+
+  const started = Date.parse(startedDate);
+  const completed = Date.parse(completedDate);
+  if (!Number.isFinite(started) || !Number.isFinite(completed)) {
+    return null;
+  }
+
+  const durationMs = completed - started;
+  if (durationMs < 0) {
+    return null;
+  }
+
+  return Math.round(durationMs / 1_000);
+}
+
 type DashboardClientProps = {
   apiUrl: string;
 };
@@ -113,6 +150,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
   const [orderingId, setOrderingId] = useState<number | null>(null);
   const [detailsPlantId, setDetailsPlantId] = useState<number | null>(null);
   const [orderDurationInput, setOrderDurationInput] = useState("");
+  const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
 
   const normalizedApiUrl = useMemo(() => apiUrl.replace(/\/$/, ""), [apiUrl]);
 
@@ -599,7 +637,9 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
             onSubmit={handleCreatePlant}
             className="rounded-2xl border border-white/10 bg-zinc-950/80 p-5 shadow-lg shadow-black/30"
           >
-            <h2 className="text-lg font-semibold text-white">Create Plant</h2>
+            <h2 className="text-lg font-semibold text-white">
+              🪴 Create Plant
+            </h2>
             <p className="mt-1 text-sm text-zinc-400">
               Add a new schedule to your watering fleet.
             </p>
@@ -729,7 +769,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
                 {orders.map((order) => (
                   <li
                     key={`${order.id}-${order.date}`}
-                    className={`grid grid-cols-[0.8fr_0.8fr_1.3fr_0.8fr_0.9fr] items-center gap-2 px-3 py-2 text-sm ${
+                    className={`px-3 py-2 text-sm ${
                       order.status.toLowerCase() === "completed"
                         ? "border-l-2 border-emerald-300/70 bg-emerald-500/16 text-emerald-100"
                         : order.status.toLowerCase() === "started"
@@ -737,17 +777,63 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
                           : "bg-black/20 text-zinc-200"
                     }`}
                   >
-                    <span className="font-medium text-zinc-300">
-                      #{order.id}
-                    </span>
-                    <span className="text-zinc-200">#{order.plant_id}</span>
-                    <span className="text-zinc-300">
-                      {new Date(order.date).toLocaleString()}
-                    </span>
-                    <span className="text-zinc-100">{order.duration}s</span>
-                    <span className="capitalize text-zinc-100">
-                      {order.status}
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedOrderId((current) =>
+                          current === order.id ? null : order.id,
+                        )
+                      }
+                      className="w-full text-left"
+                    >
+                      <div className="grid cursor-pointer grid-cols-[0.8fr_0.8fr_1.3fr_0.8fr_0.9fr] items-center gap-2">
+                        <span className="font-medium text-zinc-300">
+                          #{order.id}
+                        </span>
+                        <span className="text-zinc-200">#{order.plant_id}</span>
+                        <span className="text-zinc-300">
+                          {new Date(order.date).toLocaleString()}
+                        </span>
+                        <span className="text-zinc-100">{order.duration}s</span>
+                        <span className="capitalize text-zinc-100">
+                          {order.status}
+                        </span>
+                      </div>
+
+                      {expandedOrderId === order.id && (
+                        <div className="mt-3 rounded-lg border border-white/12 bg-black/25 p-3">
+                          <div className="grid grid-cols-1 gap-3 text-xs uppercase tracking-[0.14em] text-zinc-300 sm:grid-cols-3">
+                            <div>
+                              <p className="text-zinc-400">Started Date</p>
+                              <p className="mt-1 text-sm normal-case tracking-normal text-zinc-100">
+                                {formatDateTime(order.started_date)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-zinc-400">Completed Date</p>
+                              <p className="mt-1 text-sm normal-case tracking-normal text-zinc-100">
+                                {formatDateTime(order.completed_date)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-zinc-400">Actual Duration</p>
+                              <p className="mt-1 text-sm normal-case tracking-normal text-zinc-100">
+                                {(() => {
+                                  const actualDuration =
+                                    computeActualDurationSeconds(
+                                      order.started_date,
+                                      order.completed_date,
+                                    );
+                                  return actualDuration === null
+                                    ? "-"
+                                    : `${actualDuration}s`;
+                                })()}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </button>
                   </li>
                 ))}
               </ul>

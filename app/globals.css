@@ -35,3 +35,7 @@ body {
   scrollbar-width: thin;
   scrollbar-color: rgba(52, 211, 153, 0.35) rgba(255, 255, 255, 0.04);
 }
+
+button {
+  cursor: pointer !important;
+}
