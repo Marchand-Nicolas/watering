@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 type Plant = {
@@ -15,7 +15,11 @@ type ApiError = {
   message?: string;
 };
 
-export default function DashboardClient() {
+type DashboardClientProps = {
+  apiUrl: string;
+};
+
+export default function DashboardClient({ apiUrl }: DashboardClientProps) {
   const searchParams = useSearchParams();
   const token = searchParams.get("token")?.trim() ?? "";
 
@@ -29,6 +33,8 @@ export default function DashboardClient() {
   const [frequencyInput, setFrequencyInput] = useState("24");
   const [enabledInput, setEnabledInput] = useState(true);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+
+  const normalizedApiUrl = useMemo(() => apiUrl.replace(/\/$/, ""), [apiUrl]);
 
   const parseApiError = async (response: Response) => {
     let data: ApiError | null = null;
@@ -45,7 +51,7 @@ export default function DashboardClient() {
   };
 
   const loadPlants = useCallback(async () => {
-    if (!token) {
+    if (!token || !normalizedApiUrl) {
       return;
     }
 
@@ -54,7 +60,7 @@ export default function DashboardClient() {
 
     try {
       const response = await fetch(
-        `/api/proxy/dashboard/list_plants?token=${encodeURIComponent(token)}`,
+        `${normalizedApiUrl}/api/dashboard/list_plants?token=${encodeURIComponent(token)}`,
         {
           method: "GET",
           headers: {
@@ -79,7 +85,7 @@ export default function DashboardClient() {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, normalizedApiUrl]);
 
   const handleCreatePlant = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -102,23 +108,31 @@ export default function DashboardClient() {
       return;
     }
 
+    if (!normalizedApiUrl) {
+      setError("Missing API_URL in environment variables.");
+      return;
+    }
+
     setSaving(true);
     setError("");
     setSuccess("");
 
     try {
-      const response = await fetch("/api/proxy/dashboard/create_plant", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await fetch(
+        `${normalizedApiUrl}/api/dashboard/create_plant`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            token,
+            watering_duration: duration,
+            watering_frequency: frequency,
+            enabled: enabledInput,
+          }),
         },
-        body: JSON.stringify({
-          token,
-          watering_duration: duration,
-          watering_frequency: frequency,
-          enabled: enabledInput,
-        }),
-      });
+      );
 
       if (!response.ok) {
         throw new Error(await parseApiError(response));
@@ -146,7 +160,7 @@ export default function DashboardClient() {
       Pick<Plant, "watering_duration" | "watering_frequency" | "enabled">
     >,
   ) => {
-    if (!token) {
+    if (!token || !normalizedApiUrl) {
       return;
     }
 
@@ -155,17 +169,20 @@ export default function DashboardClient() {
     setSuccess("");
 
     try {
-      const response = await fetch("/api/proxy/dashboard/update_plant", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await fetch(
+        `${normalizedApiUrl}/api/dashboard/update_plant`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            token,
+            plant_id: plantId,
+            ...updates,
+          }),
         },
-        body: JSON.stringify({
-          token,
-          plant_id: plantId,
-          ...updates,
-        }),
-      });
+      );
 
       if (!response.ok) {
         throw new Error(await parseApiError(response));
@@ -189,7 +206,7 @@ export default function DashboardClient() {
     await loadPlants();
   };
 
-  const canLoad = Boolean(token);
+  const canLoad = Boolean(token && normalizedApiUrl);
 
   useEffect(() => {
     if (!canLoad) {
@@ -253,6 +270,12 @@ export default function DashboardClient() {
           <AlertCard
             tone="error"
             message="Missing token. Open this dashboard with ?token=YOUR_DEVICE_TOKEN"
+          />
+        )}
+        {!normalizedApiUrl && (
+          <AlertCard
+            tone="error"
+            message="Missing API_URL in .env. Add API_URL (or NEXT_PUBLIC_API_URL) and restart the app."
           />
         )}
         {error && <AlertCard tone="error" message={error} />}
