@@ -64,6 +64,32 @@ function isLastCallOlderThanOneDay(
   return Date.now() - lastCallTime > MS_PER_DAY;
 }
 
+function formatRelativeTimeFromNow(timestampMs: number): string {
+  const diffMs = timestampMs - Date.now();
+  const absDiffMs = Math.abs(diffMs);
+
+  if (absDiffMs < 1_000) {
+    return "just now";
+  }
+  const seconds = Math.round(diffMs / 1_000);
+  if (Math.abs(seconds) < 60) {
+    return `${Math.abs(seconds)}s ago`;
+  }
+
+  const minutes = Math.round(diffMs / 60_000);
+  if (Math.abs(minutes) < 60) {
+    return `${Math.abs(minutes)}m ago`;
+  }
+
+  const hours = Math.round(diffMs / 3_600_000);
+  if (Math.abs(hours) < 24) {
+    return `${Math.abs(hours)}h ago`;
+  }
+
+  const days = Math.round(diffMs / 86_400_000);
+  return `${Math.abs(days)}d ago`;
+}
+
 type DashboardClientProps = {
   apiUrl: string;
 };
@@ -414,6 +440,27 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
     [plants, detailsPlantId],
   );
 
+  const latestConnectionLabel = useMemo(() => {
+    const latestTimestamp = plants.reduce<number | null>((latest, plant) => {
+      if (!plant.last_call) {
+        return latest;
+      }
+
+      const parsed = Date.parse(plant.last_call);
+      if (!Number.isFinite(parsed)) {
+        return latest;
+      }
+
+      return latest === null || parsed > latest ? parsed : latest;
+    }, null);
+
+    if (latestTimestamp === null) {
+      return "-";
+    }
+
+    return formatRelativeTimeFromNow(latestTimestamp);
+  }, [plants]);
+
   const openPlantDetails = (plantId: number) => {
     setOrderDurationInput("");
     setDetailsPlantId(plantId);
@@ -516,10 +563,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <MetricCard label="Plants" value={plants.length.toString()} />
-          <MetricCard
-            label="Enabled"
-            value={plants.filter((plant) => plant.enabled).length.toString()}
-          />
+          <MetricCard label="Last update" value={latestConnectionLabel} />
           <MetricCard
             label="Avg. Frequency"
             value={
