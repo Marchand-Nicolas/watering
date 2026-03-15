@@ -861,11 +861,15 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
                           <span className="font-medium text-zinc-300">
                             #{order.id}
                           </span>
-                          <span className="text-zinc-200">#{order.plant_id}</span>
+                          <span className="text-zinc-200">
+                            #{order.plant_id}
+                          </span>
                           <span className="text-zinc-300">
                             {new Date(order.date).toLocaleString()}
                           </span>
-                          <span className="text-zinc-100">{order.duration}s</span>
+                          <span className="text-zinc-100">
+                            {order.duration}s
+                          </span>
                           <span className="capitalize text-zinc-100">
                             {order.status}
                           </span>
