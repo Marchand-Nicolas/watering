@@ -1052,7 +1052,20 @@ function PlantRow({
 
   const hasNoConnection = !plant.last_call;
   const isLastCallStale = Boolean(plant.is_last_call_stale);
-  const emojiList = ["🌱", "🌿", "🪴", "🍀", "🍃", "🌳", "🌵", "🌾", "🌴"];
+  const emojiList = [
+    "🪻",
+    "🌱",
+    "🌿",
+    "🪴",
+    "🌺",
+    "🍀",
+    "🍃",
+    "🌳",
+    "🌵",
+    "🌼",
+    "🌾",
+    "🌴",
+  ];
   const plantEmoji = isLastCallStale
     ? "🍂"
     : emojiList[plant.id % emojiList.length];
