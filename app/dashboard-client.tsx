@@ -146,6 +146,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
   const [updatingId, setUpdatingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [orderingId, setOrderingId] = useState<number | null>(null);
+  const [deletingOrderId, setDeletingOrderId] = useState<number | null>(null);
   const [detailsPlantId, setDetailsPlantId] = useState<number | null>(null);
   const [orderDurationInput, setOrderDurationInput] = useState("");
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
@@ -471,6 +472,64 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
     [token, normalizedApiUrl],
   );
 
+  const deleteOrder = useCallback(
+    async (orderId: number) => {
+      if (!token || !normalizedApiUrl) {
+        return;
+      }
+
+      const endpoints = [
+        "/api/dashboard/delete_order",
+        "/dashboard/delete_order",
+      ];
+
+      setDeletingOrderId(orderId);
+      setError("");
+      setSuccess("");
+
+      try {
+        let lastError: Error | null = null;
+
+        for (const endpoint of endpoints) {
+          try {
+            const response = await fetch(`${normalizedApiUrl}${endpoint}`, {
+              method: "DELETE",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                token,
+                order_id: orderId,
+              }),
+            });
+
+            if (!response.ok) {
+              lastError = new Error(await parseApiError(response));
+              continue;
+            }
+
+            setExpandedOrderId((current) =>
+              current === orderId ? null : current,
+            );
+            setSuccess(`Order #${orderId} deleted.`);
+            await loadOrders();
+            return;
+          } catch (deleteError) {
+            lastError =
+              deleteError instanceof Error
+                ? deleteError
+                : new Error("Failed to delete watering order");
+          }
+        }
+
+        setError(lastError?.message ?? "Failed to delete watering order");
+      } finally {
+        setDeletingOrderId(null);
+      }
+    },
+    [token, normalizedApiUrl, loadOrders],
+  );
+
   const selectedPlant = useMemo(
     () => plants.find((plant) => plant.id === detailsPlantId) ?? null,
     [plants, detailsPlantId],
@@ -527,6 +586,15 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
     }
 
     await deletePlant(selectedPlant.id, true);
+  };
+
+  const handleDeleteOrder = async (orderId: number) => {
+    const confirmed = window.confirm(`Delete order #${orderId}?`);
+    if (!confirmed) {
+      return;
+    }
+
+    await deleteOrder(orderId);
   };
 
   const canLoad = Boolean(token && normalizedApiUrl);
@@ -764,41 +832,47 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
               </div>
             ) : (
               <ul className="divide-y divide-white/5">
-                {orders.map((order) => (
-                  <li
-                    key={`${order.id}-${order.date}`}
-                    className={`px-3 py-2 text-sm ${
-                      order.status.toLowerCase() === "completed"
-                        ? "border-l-2 border-emerald-300/70 bg-emerald-500/16 text-emerald-100"
-                        : order.status.toLowerCase() === "started"
-                          ? "border-l-2 border-amber-300/80 bg-[repeating-linear-gradient(135deg,rgba(250,204,21,0.28)_0px,rgba(250,204,21,0.28)_8px,rgba(0,0,0,0.38)_8px,rgba(0,0,0,0.38)_16px)] text-amber-50"
-                          : "bg-black/20 text-zinc-200"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setExpandedOrderId((current) =>
-                          current === order.id ? null : order.id,
-                        )
-                      }
-                      className="w-full text-left"
-                    >
-                      <div className="grid cursor-pointer grid-cols-[0.8fr_0.8fr_1.3fr_0.8fr_0.9fr] items-center gap-2">
-                        <span className="font-medium text-zinc-300">
-                          #{order.id}
-                        </span>
-                        <span className="text-zinc-200">#{order.plant_id}</span>
-                        <span className="text-zinc-300">
-                          {new Date(order.date).toLocaleString()}
-                        </span>
-                        <span className="text-zinc-100">{order.duration}s</span>
-                        <span className="capitalize text-zinc-100">
-                          {order.status}
-                        </span>
-                      </div>
+                {orders.map((order) => {
+                  const isExpanded = expandedOrderId === order.id;
+                  const isDeletingOrder = deletingOrderId === order.id;
 
-                      {expandedOrderId === order.id && (
+                  return (
+                    <li
+                      key={`${order.id}-${order.date}`}
+                      className={`px-3 py-2 text-sm ${
+                        order.status.toLowerCase() === "completed"
+                          ? "border-l-2 border-emerald-300/70 bg-emerald-500/16 text-emerald-100"
+                          : order.status.toLowerCase() === "started"
+                            ? "border-l-2 border-amber-300/80 bg-[repeating-linear-gradient(135deg,rgba(250,204,21,0.28)_0px,rgba(250,204,21,0.28)_8px,rgba(0,0,0,0.38)_8px,rgba(0,0,0,0.38)_16px)] text-amber-50"
+                            : "bg-black/20 text-zinc-200"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedOrderId((current) =>
+                            current === order.id ? null : order.id,
+                          )
+                        }
+                        disabled={isDeletingOrder}
+                        className="w-full text-left disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <div className="grid cursor-pointer grid-cols-[0.8fr_0.8fr_1.3fr_0.8fr_0.9fr] items-center gap-2">
+                          <span className="font-medium text-zinc-300">
+                            #{order.id}
+                          </span>
+                          <span className="text-zinc-200">#{order.plant_id}</span>
+                          <span className="text-zinc-300">
+                            {new Date(order.date).toLocaleString()}
+                          </span>
+                          <span className="text-zinc-100">{order.duration}s</span>
+                          <span className="capitalize text-zinc-100">
+                            {order.status}
+                          </span>
+                        </div>
+                      </button>
+
+                      {isExpanded && (
                         <div className="mt-3 rounded-lg border border-white/12 bg-black/25 p-3">
                           <div className="grid grid-cols-1 gap-3 text-xs uppercase tracking-[0.14em] text-zinc-300 sm:grid-cols-3">
                             <div>
@@ -829,11 +903,22 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
                               </p>
                             </div>
                           </div>
+
+                          <div className="mt-4 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteOrder(order.id)}
+                              disabled={isDeletingOrder}
+                              className="inline-flex items-center justify-center rounded-lg border border-rose-300/35 bg-rose-400/14 px-3 py-2 text-xs font-medium uppercase tracking-[0.16em] text-rose-100 transition hover:border-rose-300/65 hover:bg-rose-400/22 disabled:cursor-not-allowed disabled:opacity-45"
+                            >
+                              {isDeletingOrder ? "Deleting..." : "Delete order"}
+                            </button>
+                          </div>
                         </div>
                       )}
-                    </button>
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
