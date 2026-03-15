@@ -36,6 +36,7 @@ type ApiError = {
 
 const SECONDS_PER_DAY = 86_400;
 const MS_PER_DAY = 86_400_000;
+const MS_PER_HOUR = 3_600_000;
 
 function secondsToDays(seconds: number): string {
   const days = seconds / SECONDS_PER_DAY;
@@ -51,9 +52,7 @@ function daysToSeconds(daysText: string): number {
   return Math.round(days * SECONDS_PER_DAY);
 }
 
-function isLastCallOlderThanOneDay(
-  lastCall: string | null | undefined,
-): boolean {
+function isLastCallOld(lastCall: string | null | undefined): boolean {
   if (!lastCall) {
     return false;
   }
@@ -63,7 +62,7 @@ function isLastCallOlderThanOneDay(
     return false;
   }
 
-  return Date.now() - lastCallTime > MS_PER_DAY;
+  return Date.now() - lastCallTime > MS_PER_HOUR * 2;
 }
 
 function formatRelativeTimeFromNow(timestampMs: number): string {
@@ -195,7 +194,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
       const data = (await response.json()) as { plants?: Plant[] };
       const normalizedPlants = (data.plants ?? []).map((plant) => ({
         ...plant,
-        is_last_call_stale: isLastCallOlderThanOneDay(plant.last_call),
+        is_last_call_stale: isLastCallOld(plant.last_call),
       }));
       setPlants(normalizedPlants);
     } catch (loadError) {
