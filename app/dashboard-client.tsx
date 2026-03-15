@@ -1052,6 +1052,10 @@ function PlantRow({
 
   const hasNoConnection = !plant.last_call;
   const isLastCallStale = Boolean(plant.is_last_call_stale);
+  const emojiList = ["🌱", "🌿", "🪴", "🍀", "🍃", "🌳", "🌵", "🌾", "🌴"];
+  const plantEmoji = isLastCallStale
+    ? "🍂"
+    : emojiList[plant.id % emojiList.length];
 
   const rowClassName = hasNoConnection
     ? "grid grid-cols-[0.7fr_1fr_1fr_0.8fr_0.9fr] items-center gap-2 border-l-2 border-zinc-500/60 bg-zinc-700/20 px-3 py-2 text-sm text-zinc-400"
@@ -1061,7 +1065,9 @@ function PlantRow({
 
   return (
     <li className={rowClassName}>
-      <span className="font-medium text-zinc-300">🌱 #{plant.id}</span>
+      <span className="font-medium text-zinc-300">
+        {plantEmoji} #{plant.id}
+      </span>
       <input
         value={duration}
         onChange={(event) => setDuration(event.target.value)}
