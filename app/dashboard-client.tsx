@@ -716,7 +716,7 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
                     : "No plants yet. Create one to get started."}
                 </div>
               ) : (
-                <ul className="divide-y divide-white/5">
+                <ul className="divide-y divide-white/5 overflow-x-auto">
                   {plants.map((plant) => (
                     <PlantRow
                       key={`${plant.id}-${plant.watering_duration}-${plant.watering_frequency}-${Number(plant.enabled)}`}
@@ -1057,7 +1057,7 @@ function PlantDetailsModal({
         className="absolute inset-0 bg-black/75 backdrop-blur-sm"
         onClick={onClose}
       />
-      <section className="relative z-10 w-full max-w-3xl rounded-3xl border border-white/12 bg-zinc-950/95 p-6 shadow-[0_30px_90px_rgba(0,0,0,0.6)]">
+      <section className="relative z-10 w-full max-w-3xl rounded-3xl border border-white/12 bg-zinc-950/95 p-6 shadow-[0_30px_90px_rgba(0,0,0,0.6)] overflow-y-auto max-h-[90dvh]">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-zinc-400">
