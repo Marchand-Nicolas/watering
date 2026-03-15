@@ -35,7 +35,6 @@ type ApiError = {
 };
 
 const SECONDS_PER_DAY = 86_400;
-const MS_PER_DAY = 86_400_000;
 const MS_PER_HOUR = 3_600_000;
 
 function secondsToDays(seconds: number): string {
