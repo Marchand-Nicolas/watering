@@ -34,8 +34,30 @@ type ApiError = {
   message?: string;
 };
 
+type CompletedWateringPoint = {
+  orderId: number;
+  plantId: number;
+  timestamp: number;
+  duration: number;
+  label: string;
+};
+
 const SECONDS_PER_DAY = 86_400;
 const MS_PER_HOUR = 3_600_000;
+const CHART_COLORS = [
+  "#34d399",
+  "#60a5fa",
+  "#f59e0b",
+  "#f472b6",
+  "#a78bfa",
+  "#22d3ee",
+  "#f87171",
+  "#84cc16",
+  "#fb7185",
+  "#2dd4bf",
+  "#eab308",
+  "#c084fc",
+];
 
 function secondsToDays(seconds: number): string {
   const days = seconds / SECONDS_PER_DAY;
@@ -123,6 +145,41 @@ function computeActualDurationSeconds(
   }
 
   return Math.round(durationMs / 1_000);
+}
+
+function getCompletedWateringTimestamp(order: Order): number | null {
+  const candidate = order.completed_date ?? order.date;
+  const parsed = Date.parse(candidate);
+
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getCompletedWateringDuration(order: Order): number {
+  return (
+    computeActualDurationSeconds(order.started_date, order.completed_date) ??
+    order.duration
+  );
+}
+
+function getStartOfDayTimestamp(timestamp: number): number {
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function getMinutesSinceMidnight(timestamp: number): number {
+  const date = new Date(timestamp);
+  return date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60;
+}
+
+function formatTimeOfDay(minutes: number): string {
+  const normalizedMinutes = Math.max(0, Math.min(1_439, Math.round(minutes)));
+  const hours = Math.floor(normalizedMinutes / 60);
+  const remainingMinutes = normalizedMinutes % 60;
+
+  return `${hours.toString().padStart(2, "0")}:${remainingMinutes
+    .toString()
+    .padStart(2, "0")}`;
 }
 
 type DashboardClientProps = {
@@ -556,6 +613,28 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
     return formatRelativeTimeFromNow(latestTimestamp);
   }, [plants]);
 
+  const completedWateringPoints = useMemo<CompletedWateringPoint[]>(() => {
+    return orders
+      .filter((order) => order.status.toLowerCase() === "completed")
+      .map((order) => {
+        const timestamp = getCompletedWateringTimestamp(order);
+        if (timestamp === null) {
+          return null;
+        }
+
+        const duration = getCompletedWateringDuration(order);
+        return {
+          orderId: order.id,
+          plantId: order.plant_id,
+          timestamp,
+          duration,
+          label: new Date(timestamp).toLocaleString(),
+        };
+      })
+      .filter((point): point is CompletedWateringPoint => point !== null)
+      .sort((left, right) => left.timestamp - right.timestamp);
+  }, [orders]);
+
   const openPlantDetails = (plantId: number) => {
     setOrderDurationInput("");
     setDetailsPlantId(plantId);
@@ -927,6 +1006,9 @@ export default function DashboardClient({ apiUrl }: DashboardClientProps) {
             )}
           </div>
         </section>
+        <section className="rounded-2xl border border-white/10 bg-zinc-950/80 p-5 shadow-lg shadow-black/30">
+          <CompletedWateringsChart points={completedWateringPoints} />
+        </section>
       </main>
 
       {success && <SuccessToast message={success} />}
@@ -959,6 +1041,318 @@ function MetricCard({ label, value }: MetricCardProps) {
       </p>
       <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
     </article>
+  );
+}
+
+type CompletedWateringsChartProps = {
+  points: CompletedWateringPoint[];
+};
+
+function CompletedWateringsChart({ points }: CompletedWateringsChartProps) {
+  const plantIds = useMemo(
+    () =>
+      [...new Set(points.map((point) => point.plantId))].sort((a, b) => a - b),
+    [points],
+  );
+
+  const plantColors = useMemo(
+    () =>
+      new Map(
+        plantIds.map((plantId, index) => [
+          plantId,
+          CHART_COLORS[index % CHART_COLORS.length],
+        ]),
+      ),
+    [plantIds],
+  );
+
+  const chartModel = useMemo(() => {
+    if (points.length === 0 || plantIds.length === 0) {
+      return null;
+    }
+
+    const width = 960;
+    const height = 360;
+    const margin = { top: 24, right: 20, bottom: 54, left: 72 };
+    const innerWidth = width - margin.left - margin.right;
+    const innerHeight = height - margin.top - margin.bottom;
+
+    const timestamps = points.map((point) => point.timestamp);
+    const durations = points.map((point) => point.duration);
+    const dayTimestamps = timestamps.map((timestamp) =>
+      getStartOfDayTimestamp(timestamp),
+    );
+    const minDayTimestamp = Math.min(...dayTimestamps);
+    const maxDayTimestamp = Math.max(...dayTimestamps);
+    const minDuration = Math.min(...durations);
+    const maxDuration = Math.max(...durations);
+    const minMinutes = 0;
+    const maxMinutes = 24 * 60;
+
+    const getX = (timestamp: number) => {
+      const dayTimestamp = getStartOfDayTimestamp(timestamp);
+
+      if (minDayTimestamp === maxDayTimestamp) {
+        return margin.left + innerWidth / 2;
+      }
+
+      return (
+        margin.left +
+        ((dayTimestamp - minDayTimestamp) /
+          (maxDayTimestamp - minDayTimestamp)) *
+          innerWidth
+      );
+    };
+
+    const getY = (timestamp: number) => {
+      const minutes = getMinutesSinceMidnight(timestamp);
+      return (
+        margin.top +
+        innerHeight -
+        ((minutes - minMinutes) / (maxMinutes - minMinutes)) * innerHeight
+      );
+    };
+
+    const getRadius = (duration: number) => {
+      if (minDuration === maxDuration) {
+        return 9;
+      }
+
+      return 5 + ((duration - minDuration) / (maxDuration - minDuration)) * 11;
+    };
+
+    const xTickCount = Math.min(5, points.length);
+    const xTicks = Array.from({ length: xTickCount }, (_, index) => {
+      const ratio = xTickCount === 1 ? 0.5 : index / (xTickCount - 1);
+      const timestamp =
+        minDayTimestamp +
+        Math.round((maxDayTimestamp - minDayTimestamp) * ratio);
+      return {
+        x: getX(timestamp),
+        label: new Date(timestamp).toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+        }),
+      };
+    });
+
+    const yTickMinutes = [0, 360, 720, 1_080, 1_439];
+    const yTicks = yTickMinutes.map((minutes) => ({
+      minutes,
+      y: getY(minDayTimestamp + minutes * 60_000),
+      label: formatTimeOfDay(minutes),
+    }));
+
+    const circles = points.map((point) => ({
+      ...point,
+      x: getX(point.timestamp),
+      y: getY(point.timestamp),
+      radius: getRadius(point.duration),
+      color: plantColors.get(point.plantId) ?? "#f5f5f5",
+    }));
+
+    return {
+      width,
+      height,
+      margin,
+      xTicks,
+      yTicks,
+      circles,
+      minDuration,
+      maxDuration,
+    };
+  }, [plantColors, plantIds, points]);
+
+  return (
+    <>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-white">
+            Completed Waterings
+          </h2>
+          <p className="mt-1 text-sm text-zinc-400">
+            Every completed watering plotted over time. Bubble size increases
+            with duration.
+          </p>
+        </div>
+        <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">
+          {points.length} completed
+        </p>
+      </div>
+
+      {chartModel === null ? (
+        <div className="mt-4 rounded-xl border border-dashed border-white/10 bg-black/20 px-4 py-10 text-center text-sm text-zinc-500">
+          No completed watering data available yet.
+        </div>
+      ) : (
+        <>
+          <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01))] p-3">
+            <svg
+              viewBox={`0 0 ${chartModel.width} ${chartModel.height}`}
+              className="h-auto w-full"
+              role="img"
+              aria-label="Completed watering scatter plot"
+            >
+              <defs>
+                <linearGradient
+                  id="completedWateringsArea"
+                  x1="0"
+                  y1="0"
+                  x2="0"
+                  y2="1"
+                >
+                  <stop offset="0%" stopColor="rgba(52,211,153,0.08)" />
+                  <stop offset="100%" stopColor="rgba(255,255,255,0.01)" />
+                </linearGradient>
+              </defs>
+
+              <rect
+                x={chartModel.margin.left}
+                y={chartModel.margin.top}
+                width={
+                  chartModel.width -
+                  chartModel.margin.left -
+                  chartModel.margin.right
+                }
+                height={
+                  chartModel.height -
+                  chartModel.margin.top -
+                  chartModel.margin.bottom
+                }
+                fill="url(#completedWateringsArea)"
+              />
+
+              {chartModel.yTicks.map((tick) => (
+                <g key={tick.minutes}>
+                  <line
+                    x1={chartModel.margin.left}
+                    y1={tick.y}
+                    x2={chartModel.width - chartModel.margin.right}
+                    y2={tick.y}
+                    stroke="rgba(255,255,255,0.08)"
+                    strokeDasharray="4 8"
+                  />
+                  <text
+                    x={chartModel.margin.left - 14}
+                    y={tick.y + 5}
+                    textAnchor="end"
+                    fill="rgba(228,228,231,0.8)"
+                    fontSize="13"
+                    fontWeight="600"
+                  >
+                    {tick.label}
+                  </text>
+                </g>
+              ))}
+
+              {chartModel.xTicks.map((tick, index) => (
+                <g key={`${tick.label}-${index}`}>
+                  <line
+                    x1={tick.x}
+                    y1={chartModel.margin.top}
+                    x2={tick.x}
+                    y2={chartModel.height - chartModel.margin.bottom}
+                    stroke="rgba(255,255,255,0.06)"
+                  />
+                  <text
+                    x={tick.x}
+                    y={chartModel.height - 18}
+                    textAnchor="middle"
+                    fill="rgba(228,228,231,0.8)"
+                    fontSize="12"
+                  >
+                    {tick.label}
+                  </text>
+                </g>
+              ))}
+
+              <line
+                x1={chartModel.margin.left}
+                y1={chartModel.height - chartModel.margin.bottom}
+                x2={chartModel.width - chartModel.margin.right}
+                y2={chartModel.height - chartModel.margin.bottom}
+                stroke="rgba(255,255,255,0.18)"
+              />
+
+              <line
+                x1={chartModel.margin.left}
+                y1={chartModel.margin.top}
+                x2={chartModel.margin.left}
+                y2={chartModel.height - chartModel.margin.bottom}
+                stroke="rgba(255,255,255,0.18)"
+              />
+
+              {chartModel.circles.map((circle) => (
+                <g key={circle.orderId}>
+                  <circle
+                    cx={circle.x}
+                    cy={circle.y}
+                    r={circle.radius + 4}
+                    fill={circle.color}
+                    opacity="0.15"
+                  />
+                  <circle
+                    cx={circle.x}
+                    cy={circle.y}
+                    r={circle.radius}
+                    fill={circle.color}
+                    stroke="rgba(255,255,255,0.85)"
+                    strokeWidth="1.5"
+                    opacity="0.9"
+                  >
+                    <title>
+                      {`Plant #${circle.plantId} • ${circle.duration}s • ${circle.label}`}
+                    </title>
+                  </circle>
+                </g>
+              ))}
+
+              <text
+                x={chartModel.width / 2}
+                y={chartModel.height - 2}
+                textAnchor="middle"
+                fill="rgba(161,161,170,0.75)"
+                fontSize="12"
+                letterSpacing="0.16em"
+              >
+                DATE
+              </text>
+              <text
+                x={18}
+                y={chartModel.height / 2}
+                textAnchor="middle"
+                fill="rgba(161,161,170,0.75)"
+                fontSize="12"
+                letterSpacing="0.16em"
+                transform={`rotate(-90 18 ${chartModel.height / 2})`}
+              >
+                TIME
+              </text>
+            </svg>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-zinc-300">
+            {plantIds.map((plantId) => (
+              <span
+                key={plantId}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-3 py-1.5"
+              >
+                <span
+                  className="size-2.5 rounded-full"
+                  style={{ backgroundColor: plantColors.get(plantId) }}
+                />
+                {`Plant #${plantId}`}
+              </span>
+            ))}
+          </div>
+
+          <p className="mt-3 text-xs text-zinc-500">
+            Duration scale: {chartModel.minDuration}s to{" "}
+            {chartModel.maxDuration}s.
+          </p>
+        </>
+      )}
+    </>
   );
 }
 
