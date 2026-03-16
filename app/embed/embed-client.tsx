@@ -177,7 +177,7 @@ export default function EmbedClient({ apiUrl }: EmbedClientProps) {
         }
 
         :root {
-          --embed-bg: #191919;
+          --embed-bg: #ffffff;
           --embed-fg: #111111;
           --embed-card-bg: #f4f4f5;
           --embed-card-border: #e4e4e7;
